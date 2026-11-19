@@ -41,7 +41,13 @@ def load_library() -> list[GameEntry]:
     raw = _read("library.json", None)
     if raw is None:
         return []
-    return [GameEntry(**g) for g in raw]
+    known = frozenset(GameEntry.__dataclass_fields__)
+    games = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        games.append(GameEntry(**{k: v for k, v in item.items() if k in known}))
+    return games
 
 
 def save_library(games: list[GameEntry]) -> bool:

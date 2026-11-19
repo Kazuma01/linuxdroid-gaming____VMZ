@@ -21,6 +21,8 @@ QScrollArea {{ border: none; }}
 QPushButton#navButton {{ text-align: left; padding: 11px 13px; border-radius: 9px; background: transparent; border: 1px solid transparent; color: {MUTED}; font-weight: 600; }}
 QPushButton#navButton:hover {{ background: {PANEL_ALT}; color: {TEXT}; }}
 QPushButton#navButton:checked {{ background: #292044; border: 1px solid #59418c; color: #d8c7ff; }}
+QFrame#toolRail {{ background: {PANEL}; border-left: 1px solid {BORDER}; max-width: 84px; }}
+QFrame#toolRail QPushButton {{ padding: 7px 4px; font-size: 11px; border-radius: 7px; }}
 QLabel#h1 {{ font-size: 25px; font-weight: 800; }}
 QLabel#h2 {{ font-size: 17px; font-weight: 700; }}
 QLabel#muted {{ color: {MUTED}; }}
@@ -35,6 +37,8 @@ QPushButton:disabled {{ color: #5a5e70; background: #171923; border: 1px solid #
 QPushButton#primary {{ background: {PURPLE}; border: 1px solid {PURPLE}; font-weight: 700; color: white; }}
 QPushButton#primary:hover {{ background: #9d77f8; }}
 QPushButton#primary:disabled {{ background: #3a3260; color: #8b86a8; }}
+QPushButton#danger {{ border: 1px solid #5c2b39; color: {RED}; padding: 9px 8px; }}
+QPushButton#danger:hover {{ border: 1px solid {RED}; background: #2a1720; }}
 QLineEdit, QComboBox, QSpinBox {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 9px; padding: 8px 10px; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 1px solid {BLUE}; }}
 QGroupBox {{ border: 1px solid {BORDER}; border-radius: 10px; margin-top: 10px; padding: 12px 8px 8px 8px; font-weight: 700; color: #d8c7ff; }}

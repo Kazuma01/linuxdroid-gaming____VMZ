@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainW
 
 from . import storage
 from .models import GameEntry, WaydroidState
+from .services.library_metadata import record_launch
+from .services.parsing import is_valid_package
 from .screens.about import AboutScreen
 from .screens.controls import ControlsScreen
 from .screens.home import HomeScreen
@@ -13,6 +15,7 @@ from .screens.library import LibraryScreen
 from .screens.settings import SettingsScreen
 from .screens.waydroid import WaydroidScreen
 from .widgets.common import demo_badge, label
+from .widgets.tool_rail import ToolRail
 
 
 class MainWindow(QMainWindow):
@@ -22,6 +25,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 720)
         self.setMinimumSize(1000, 600)
         self.games = storage.load_library()
+        self._last_game = None
 
         root = QWidget()
         root.setObjectName("root")
@@ -76,6 +80,11 @@ class MainWindow(QMainWindow):
         body.addWidget(side)
         body.addWidget(self.stack, 1)
 
+        # ---- barra lateral direita de ferramentas ----
+        self.tool_rail = ToolRail()
+        body.addWidget(self.tool_rail)
+        self.tool_rail.tool_requested.connect(self._handle_tool)
+
         # ---- barra de estado ----
         bar = QFrame()
         bar.setObjectName("statusBar")
@@ -93,11 +102,46 @@ class MainWindow(QMainWindow):
         self.waydroid.apps_loaded.connect(self.on_android_apps_loaded)
         self.home.play_requested.connect(self.play)
         self.library.play_requested.connect(self.play)
+        self.library.remove_requested.connect(self.remove_game)
         self.home.games_changed.connect(self.on_games_changed)
         self.update_status(self.waydroid.state)
 
     def update_status(self, state: WaydroidState):
         self.status_label.setText(f"Waydroid: {state.value}")
+        self.tool_rail.set_runtime_state(state)
+
+    def _handle_tool(self, key: str):
+        """Apenas ferramentas com backend real são habilitadas no trilho."""
+        navigation = {
+            "controls": self.controls,
+            "adb": self.waydroid,
+            "install": self.waydroid,
+            "settings": self.settings,
+        }
+        if key in navigation:
+            self.stack.setCurrentWidget(navigation[key])
+            return
+        if key == "fullscreen":
+            if self.waydroid.state is not WaydroidState.RUNNING:
+                QMessageBox.warning(self, "Android inativo", "Ative o Android para usar a tela cheia.")
+                return
+            self.status_label.setText("Waydroid: trazendo a superfície para a frente…")
+            self.waydroid.service.show_full_ui(
+                lambda result: self.status_label.setText(
+                    f"Waydroid: superfície {'pronta' if result.ok else 'indisponível'}; resolução não alterada."
+                )
+            )
+            return
+        if key == "restart_app" and getattr(self, "_last_game", None) is not None:
+            game = self._last_game
+            if self.waydroid.state is not WaydroidState.RUNNING:
+                QMessageBox.warning(self, "Android inativo", "Ative o Android antes de reabrir o jogo.")
+                return
+            self.status_label.setText(f"Waydroid: reabrindo {game.name}…")
+            self.waydroid.service.launch_app(game.package_id, lambda result: self._app_launch_done(game, result))
+            return
+        # Nenhuma outra ferramenta emite evento: os botões são desabilitados.
+        return
 
     def on_games_changed(self):
         storage.save_library(self.games)
@@ -121,11 +165,83 @@ class MainWindow(QMainWindow):
         self.controls.set_games(self.games)
         QMessageBox.information(self, "Biblioteca Android", f"{len(apps)} aplicativo(s) encontrados; {added} novo(s) adicionado(s).")
 
+    def confirm_remove(self, game: GameEntry) -> bool:
+        """Confirmação explícita de uma operação destrutiva; padrão é NÃO."""
+        answer = QMessageBox.warning(
+            self,
+            "Remover aplicativo Android",
+            f"Remover {game.name} ({game.package_id}) do Android?\n\n"
+            "Os dados do jogo no container serão apagados e o LinuxDroid não oferece reversão. "
+            "O comando só é enviado com o Android ativo.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def remove_game(self, game: GameEntry):
+        """Remove um app confirmado, com confirmação e estado ativo — sem spoofing/root."""
+        if game.installed_status != "installed" or not is_valid_package(game.package_id):
+            QMessageBox.warning(
+                self, "Remoção indisponível",
+                "A remoção só é oferecida para aplicativos confirmados pelo Android "
+                "com package ID válido.",
+            )
+            return
+        if not self.confirm_remove(game):
+            return
+        if self.waydroid.state is not WaydroidState.RUNNING:
+            QMessageBox.warning(
+                self, "Android inativo",
+                "Inicie ou reative a sessão Android antes de remover aplicativos.",
+            )
+            return
+        self.status_label.setText(f"Waydroid: removendo {game.name}…")
+
+        def done(result):
+            if not result.ok:
+                QMessageBox.warning(
+                    self, "Remover aplicativo",
+                    f"Não foi possível remover {game.name}.\n\n{result.text or result.error}",
+                )
+                self.update_status(self.waydroid.state)
+                return
+            game.installed_status = "missing"
+            game.last_launched_at = ""
+            storage.save_library(self.games)
+            self.home.refresh()
+            self.library.refresh()
+            self.controls.set_games(self.games)
+            self.status_label.setText(
+                f"Waydroid: comando de remoção aceito para {game.name}; "
+                "o Android confirmou a exclusão."
+            )
+
+        self.waydroid.service.remove_app(game.package_id, done)
+
     def play(self, game: GameEntry):
         if not game.package_id:
             QMessageBox.warning(self, "Package ID ausente", f"{game.name} não tem package ID. Atualize a biblioteca Android para importar o identificador.")
             return
-        if self.waydroid.state != WaydroidState.RUNNING:
+        if self.waydroid.state is WaydroidState.FROZEN:
+            answer = QMessageBox.question(
+                self, "Reativar ambiente Android",
+                "O container Waydroid está congelado. Deseja reativá-lo e abrir o jogo automaticamente?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self.status_label.setText("Waydroid: reativando container…")
+
+            def reactivated(result):
+                if not result.ok:
+                    QMessageBox.warning(self, "Reativar Waydroid", f"Não foi possível reativar o container.\n\n{result.text or result.error}")
+                    return
+                self._launch_game(game)
+
+            self.waydroid.service.unfreeze(reactivated)
+            return
+
+        if self.waydroid.state is not WaydroidState.RUNNING:
             answer = QMessageBox.question(
                 self, "Iniciar ambiente Android",
                 "O Waydroid está parado. Deseja iniciar a sessão Android e abrir o jogo automaticamente?",
@@ -199,9 +315,36 @@ class MainWindow(QMainWindow):
 
     def _app_launch_done(self, game, result, mapping_loaded=False):
         self._launch_feedback(game, result.ok, result.text)
-        if result.ok and mapping_loaded:
-            # F8 no Phantom continua disponível para alternar captura; aqui iniciamos automaticamente.
-            QTimer.singleShot(1600, self.controls.phantom.enter_capture)
+        if result.ok:
+            # Registra apenas que o comando de lançamento foi aceito; isso
+            # NÃO prova que o jogo abriu ou chegou ao lobby.
+            record_launch(game)
+            self._last_game = game
+            self.tool_rail.set_last_game(True)
+            storage.save_library(self.games)
+        if not result.ok or not mapping_loaded:
+            return
+
+        # Sem timer fixo: a captura so e solicitada depois que o app abriu,
+        # o perfil foi carregado e o daemon Phantom respondeu ao status.
+        self.status_label.setText("Waydroid: jogo aberto; verificando Phantom…")
+
+        def capture_done(capture_result):
+            if capture_result.ok:
+                self.status_label.setText(
+                    f"Waydroid: comando de captura aceito para {game.name}; "
+                    "injeção real ainda exige teste físico."
+                )
+            else:
+                self.status_label.setText("Waydroid: jogo aberto; não foi possível ativar a captura automaticamente.")
+
+        def daemon_ready(is_ready):
+            if not is_ready:
+                self.status_label.setText("Waydroid: jogo aberto; Phantom indisponível. Use F8 quando o daemon estiver ativo.")
+                return
+            self.controls.phantom.enter_capture(capture_done)
+
+        self.controls.phantom.status(daemon_ready)
 
     def closeEvent(self, event):
         self.controls.shutdown()

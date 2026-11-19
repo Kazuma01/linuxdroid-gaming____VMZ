@@ -34,14 +34,18 @@ class PhantomService(QObject):
 
         self.runner.run("phantom", args, done, timeout)
 
-    def status(self):
+    def status(self, callback=None):
         if not self.available():
             self.status_ready.emit("Phantom não encontrado. Instale o mapeador opcional para ativar teclado/mouse no Waydroid.", False)
+            if callback:
+                callback(False)
             return
 
         def done(result):
             text = (result.stdout + result.stderr).strip() or ("Phantom respondeu." if result.ok else "Daemon Phantom indisponível.")
             self.status_ready.emit(text, result.ok)
+            if callback:
+                callback(bool(result.ok))
 
         self._run(["status"], done)
 

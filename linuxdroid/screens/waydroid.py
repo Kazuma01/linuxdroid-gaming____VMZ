@@ -1,6 +1,5 @@
 """Painel Waydroid: sessão, modo janela única, instalação e dispositivos."""
 import tempfile
-import zipfile
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -11,11 +10,13 @@ from PySide6.QtWidgets import (
 
 from ..models import WaydroidState
 from ..services.adb_service import AdbService
+from ..services.installer import plan_apk_installation, plan_xapk_installation
 from ..services.waydroid_service import WaydroidService
 from ..widgets.common import label, panel, title_row
 
 COLORS = {
     WaydroidState.RUNNING: "#22c55e",
+    WaydroidState.FROZEN: "#f59e0b",
     WaydroidState.STARTING: "#f59e0b",
     WaydroidState.ERROR: "#ef4444",
     WaydroidState.NOT_INSTALLED: "#ef4444",
@@ -126,7 +127,7 @@ class WaydroidScreen(QWidget):
         self.log.setMaximumBlockCount(500)
         outer.addWidget(self.log, 1)
 
-        self.btn_refresh.clicked.connect(self.refresh)
+        self.btn_refresh.clicked.connect(self.refresh_with_mode)
         self.btn_start.clicked.connect(self.start)
         self.btn_stop.clicked.connect(self.stop)
         self.btn_restart.clicked.connect(self.restart)
@@ -149,7 +150,8 @@ class WaydroidScreen(QWidget):
         self.adb.devices_loaded.connect(self._devices_loaded)
 
         self.refresh()
-        self.service.get_multi_windows(self._mode_received)
+        # Nao consultar propriedades automaticamente: em Waydroid 1.6.x isso
+        # pode perturbar um container FROZEN. O modo so e lido sob demanda.
         self.detect_devices()
 
     @property
@@ -160,7 +162,12 @@ class WaydroidScreen(QWidget):
         self.log.appendPlainText(message)
 
     def refresh(self):
+        """Atualiza apenas o estado observável; nao executa `waydroid prop get`."""
         self.service.refresh()
+
+    def refresh_with_mode(self):
+        """Acao explicita do usuario: atualiza estado e consulta o modo de janela."""
+        self.refresh()
         self.service.get_multi_windows(self._mode_received)
 
     def _status(self, status):
@@ -169,9 +176,10 @@ class WaydroidScreen(QWidget):
         color = COLORS.get(status.state, "#a5a5b5")
         self.state_label.setText(f"Estado: <span style='color:{color}'>{status.state.value}</span>")
         self.hint.setText(status.message or f"Sessão: {status.session or '—'} | Container: {status.container or '—'} | IP: {status.ip or '—'}")
-        self.btn_start.setEnabled(status.state not in (WaydroidState.RUNNING, WaydroidState.STARTING))
-        self.btn_stop.setEnabled(status.state == WaydroidState.RUNNING)
-        self.btn_restart.setEnabled(status.state == WaydroidState.RUNNING)
+        session_active = status.state in (WaydroidState.RUNNING, WaydroidState.FROZEN)
+        self.btn_start.setEnabled(not session_active and status.state is not WaydroidState.STARTING)
+        self.btn_stop.setEnabled(session_active)
+        self.btn_restart.setEnabled(session_active)
         self.state_changed.emit(status.state)
 
     def _mode_received(self, result):
@@ -304,7 +312,12 @@ class WaydroidScreen(QWidget):
             return
         suffix = Path(path).suffix.lower()
         if suffix == ".apk":
-            self._append(f"Instalando APK: {path}")
+            plan = plan_apk_installation(path)
+            if not plan.ok:
+                self._append(f"APK recusado: {plan.message}")
+                QMessageBox.warning(self, "APK recusado", plan.message)
+                return
+            self._append(f"Instalando APK — {plan.message}")
             self.service.install_app(path, self._single_install_done)
             return
         if suffix != ".xapk":
@@ -326,24 +339,17 @@ class WaydroidScreen(QWidget):
             QMessageBox.warning(self, "Instalação", "A instalação falhou. Confira o log técnico; o APK pode ser incompatível com a arquitetura do Waydroid.")
 
     def _install_xapk(self, path):
-        try:
-            archive = zipfile.ZipFile(path)
-            apk_members = [name for name in archive.namelist() if name.lower().endswith(".apk") and not name.endswith("/")]
-            if not apk_members:
-                raise ValueError("O XAPK não contém arquivos APK.")
-            self._xapk_tempdir = tempfile.TemporaryDirectory(prefix="linuxdroid-xapk-")
-            folder = Path(self._xapk_tempdir.name)
-            extracted = []
-            for index, member in enumerate(apk_members):
-                destination = folder / f"split_{index:02d}_{Path(member).name}"
-                destination.write_bytes(archive.read(member))
-                extracted.append(destination)
-            archive.close()
-        except (OSError, zipfile.BadZipFile, KeyError, ValueError) as error:
-            QMessageBox.warning(self, "XAPK inválido", str(error))
+        tempdir = tempfile.TemporaryDirectory(prefix="linuxdroid-xapk-")
+        plan = plan_xapk_installation(path, Path(tempdir.name))
+        if not plan.ok:
+            tempdir.cleanup()
+            self._append(f"XAPK recusado: {plan.message}")
+            QMessageBox.warning(self, "XAPK recusado", plan.message)
             return
+        self._xapk_tempdir = tempdir
+        extracted = list(plan.apks)
 
-        self._append(f"Instalando XAPK com {len(extracted)} split(s)…")
+        self._append(f"Instalando XAPK com {len(extracted)} split(s) — {plan.message}")
         self.adb.install_multiple(extracted, self._xapk_install_done)
 
     def _xapk_install_done(self, ok):

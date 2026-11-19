@@ -30,6 +30,8 @@ from ..input.qt_bridge import (
     canonical_for_qt_key,
 )
 from ..models import GameEntry
+from ..services.display_metrics import documented_reference
+from ..services.display_metrics_service import DisplayMetricsService
 from ..services.phantom_service import PhantomService
 from ..widgets.common import label, panel, title_row
 
@@ -380,6 +382,11 @@ class ControlsScreen(QWidget):
         self.phantom = PhantomService(self)
         self.phantom.log_line.connect(self._log_phantom)
         self.phantom.status_ready.connect(self._phantom_status)
+        self.display_metrics_service = DisplayMetricsService(parent=self)
+        self.display_metrics_service.metrics_detected.connect(self._on_metrics_detected)
+        self.display_metrics_service.log_line.connect(self._log_display_metrics)
+        # Referência documentada desta máquina — nunca é apresentada como medição.
+        self._display_metrics = documented_reference()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(26, 20, 26, 18)
@@ -396,9 +403,12 @@ class ControlsScreen(QWidget):
         top.addWidget(label("Jogo:", "h2"))
         top.addWidget(self.game_combo, 1)
         top.addWidget(label("Resolução do perfil:"))
-        self.width_spin = QSpinBox(); self.width_spin.setRange(320, 7680); self.width_spin.setValue(1280); self.width_spin.setSuffix(" px")
-        self.height_spin = QSpinBox(); self.height_spin.setRange(320, 4320); self.height_spin.setValue(720); self.height_spin.setSuffix(" px")
+        self.width_spin = QSpinBox(); self.width_spin.setRange(320, 7680); self.width_spin.setValue(self._display_metrics.width); self.width_spin.setSuffix(" px")
+        self.height_spin = QSpinBox(); self.height_spin.setRange(320, 4320); self.height_spin.setValue(self._display_metrics.height); self.height_spin.setSuffix(" px")
         top.addWidget(self.width_spin); top.addWidget(self.height_spin)
+        self.detect_resolution_btn = QPushButton("Detectar resolução")
+        self.detect_resolution_btn.setToolTip("Consulta somente leitura à superfície Android; não altera o container.")
+        top.addWidget(self.detect_resolution_btn)
         top.addWidget(label("Sensibilidade global:"))
         self.global_sensitivity = QDoubleSpinBox()
         self.global_sensitivity.setRange(0.1, 5.0)
@@ -406,6 +416,9 @@ class ControlsScreen(QWidget):
         self.global_sensitivity.setValue(1.0)
         top.addWidget(self.global_sensitivity)
         outer.addLayout(top)
+        self.display_status = label("", "muted")
+        outer.addWidget(self.display_status)
+        self._update_display_status()
 
         split = QSplitter(Qt.Orientation.Horizontal)
         self.canvas = MappingCanvas()
@@ -591,6 +604,7 @@ class ControlsScreen(QWidget):
         self.width_spin.valueChanged.connect(self._screen_size_changed)
         self.height_spin.valueChanged.connect(self._screen_size_changed)
         self.global_sensitivity.valueChanged.connect(self._sensitivity_changed)
+        self.detect_resolution_btn.clicked.connect(self.detect_resolution)
         self.save_btn.clicked.connect(self.save_profile)
         self.export_btn.clicked.connect(self.export_profile)
         self.import_btn.clicked.connect(self.import_profile)
@@ -674,8 +688,9 @@ class ControlsScreen(QWidget):
 
     def _set_screen_fields(self, profile: ControlProfileV2) -> None:
         screen = profile.screen_contract
-        width = screen.width or 1280
-        height = screen.height or 720
+        reference = documented_reference()
+        width = screen.width or reference.width
+        height = screen.height or reference.height
         for widget in (self.width_spin, self.height_spin, self.global_sensitivity):
             widget.blockSignals(True)
         self.width_spin.setValue(int(width))
@@ -690,6 +705,40 @@ class ControlsScreen(QWidget):
         if self.editor is not None:
             self.editor.set_screen(self.width_spin.value(), self.height_spin.value())
             self._update_editor_status()
+
+    # -- medição da superfície (somente leitura) ----------------------------
+
+    def _update_display_status(self) -> None:
+        metrics = self._display_metrics
+        text = f"Superfície Android: {metrics.status_label} — {metrics.label}"
+        if metrics.note:
+            text += f" · {metrics.note}"
+        self.display_status.setText(text)
+
+    def _log_display_metrics(self, text: str) -> None:
+        self.log.setText(text[:500])
+
+    def detect_resolution(self) -> None:
+        """Dispara a medição; não altera sessão, container, props nem o jogo."""
+        self.log.setText("Consultando a superfície Android (somente leitura)…")
+        self.display_metrics_service.detect()
+
+    def _on_metrics_detected(self, metrics) -> None:
+        self._display_metrics = metrics
+        # Um resultado NÃO MEDIDO não apaga a configuração manual do usuário.
+        if metrics.known:
+            for widget in (self.width_spin, self.height_spin):
+                widget.blockSignals(True)
+            self.width_spin.setValue(metrics.width)
+            self.height_spin.setValue(metrics.height)
+            for widget in (self.width_spin, self.height_spin):
+                widget.blockSignals(False)
+            self.canvas.set_screen_size(metrics.width, metrics.height)
+            if self.editor is not None:
+                source = "measured" if metrics.measured else "user"
+                self.editor.set_screen(metrics.width, metrics.height, source)
+                self._update_editor_status()
+        self._update_display_status()
 
     def _sensitivity_changed(self, value):
         if self.editor is not None:
@@ -770,13 +819,14 @@ class ControlsScreen(QWidget):
                     self.log.setText("Perfil V1 ajustado em memória: " + "; ".join(warnings))
 
         if profile is None:
+            reference = documented_reference()
             profile = legacy_payload_to_profile({
                 "version": 1,
                 "name": self._game_name(),
-                "screen": {"width": 1280, "height": 720},
+                "screen": {"width": reference.width, "height": reference.height},
                 "global_sensitivity": 1.0,
                 "nodes": [],
-            }, game_package=package, screen_source="default")
+            }, game_package=package, screen_source="reference")
 
         if not profile.name:
             profile.name = self._game_name()
@@ -1483,6 +1533,7 @@ class ControlsScreen(QWidget):
         self.phantom_status.setText(("Phantom ativo: " if ok else "Phantom: ") + text[:220])
 
     def shutdown(self):
+        self.display_metrics_service.shutdown()
         self.phantom.shutdown()
 
     def closeEvent(self, event):

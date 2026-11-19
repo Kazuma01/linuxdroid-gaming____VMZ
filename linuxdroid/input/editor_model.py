@@ -332,10 +332,15 @@ class BindingEditor:
         used.update(excluding or set())
         return next(slot for slot in range(255) if slot not in used)
 
-    def set_screen(self, width: int, height: int) -> None:
+    def set_screen(self, width: int, height: int, source: str = "user") -> None:
+        """Atualiza o contrato de tela; `source` identifica a origem do valor.
+
+        Padrão ``user`` preserva o comportamento anterior. A UI de medição pode
+        passar ``measured`` quando o valor veio de uma consulta somente leitura.
+        """
         def operation() -> None:
             self.profile.screen_contract = ScreenContract(
-                int(width), int(height), "user"
+                int(width), int(height), source
             )
 
         self._mutate(operation)

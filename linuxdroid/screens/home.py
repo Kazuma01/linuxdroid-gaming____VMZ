@@ -3,7 +3,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from .. import storage
 from ..models import GameEntry
+from ..services.library_metadata import recent_games
 from ..widgets.common import label, panel, title_row
 from ..widgets.game_card import GameCard
 
@@ -62,9 +64,10 @@ class HomeScreen(QWidget):
         lay = QHBoxLayout(holder)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
-        for game in self.games[:8]:
+        for game in recent_games(self.games, 8):
             card = GameCard(game)
             card.play_clicked.connect(self.play_requested)
+            card.favorite_toggled.connect(self._favorite_toggled)
             lay.addWidget(card)
         if not self.games:
             lay.addWidget(label("Sua biblioteca está vazia. Adicione um jogo para começar.", "muted"))
@@ -80,3 +83,9 @@ class HomeScreen(QWidget):
         self.games.append(GameEntry(name.strip(), pkg.strip()))
         self.games_changed.emit()
         self.refresh()
+
+    def _favorite_toggled(self, game, checked):
+        game.favorite = bool(checked)
+        # O card já atualizou a estrela; salvar e notificar sem recriar o
+        # widget durante a emissão do sinal evita destruir o emissor.
+        self.games_changed.emit()

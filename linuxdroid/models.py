@@ -8,6 +8,7 @@ class WaydroidState(Enum):
     STOPPED = "Parado"
     STARTING = "Iniciando"
     RUNNING = "Ativo"
+    FROZEN = "Congelado"
     ERROR = "Erro"
     UNKNOWN = "Desconhecido"
     NOT_INITIALIZED = "Não inicializado"
@@ -22,6 +23,11 @@ class GameEntry:
     launch_method: str = "waydroid"
     notes: str = ""
     installed_status: str = "unknown"  # unknown / installed / missing
+    favorite: bool = False
+    category: str = ""
+    # Registro do último comando de lançamento aceito — não prova jogo aberto.
+    last_launched_at: str = ""
+    launch_count: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)

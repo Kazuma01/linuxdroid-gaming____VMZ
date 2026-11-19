@@ -23,7 +23,11 @@ O editor é por jogo/package ID e oferece:
 - Importação e exportação de perfis JSON do Phantom.
 - Imagem de referência: importe uma captura do jogo para posicionar os pontos diretamente sobre o HUD. As imagens são guardadas localmente por jogo.
 
-O editor usa coordenadas normalizadas de 0 a 1. A resolução do perfil precisa corresponder exatamente à resolução definida no `~/.config/phantom/config.toml` e à superfície Android. A imagem de referência facilita o alinhamento, mas não detecta automaticamente a resolução real do Waydroid.
+O editor usa coordenadas normalizadas de 0 a 1. A resolução do perfil precisa corresponder exatamente à resolução definida no `~/.config/phantom/config.toml` e à superfície Android. A imagem de referência facilita o alinhamento, mas não detecta automaticamente a resolução real do Waydroid. No ambiente de teste atual a superfície foi **medida** em 1920x1034 a 60 Hz (densidade 180), valor que deve ser usado ao criar perfis — não o fallback 1280x720.
+
+### Ambiente Android medido
+
+Nesta máquina o Waydroid 1.6.3 executa Android 13 (LineageOS 20, build `TQ3A.230901.001`) com GPU AMD Radeon RX 580 2048SP. A aceleração dentro do Android foi confirmada por `dumpsys SurfaceFlinger`: `radeonsi/polaris10/ACO`, OpenGL ES 3.2, Mesa 26.0.8, HWC 1.5, 1920x1034@60 Hz. O suporte a ARM64 vem de `libndk_translation.so` 0.2.3. O Free Fire (`com.dts.freefireth`, Unity 2018/IL2CPP `arm64-v8a`) **não está aprovado**: aborta no tradutor antes do lobby. Nenhum backend de entrada é declarado operacional sem teste físico real; veja `docs/V3.md`.
 
 ### Mapeamento real
 
@@ -122,4 +126,4 @@ Toda identidade de entrada é classificada como uma destas:
 PYTHONDONTWRITEBYTECODE=1 python -B -m unittest discover -s tests -v
 ```
 
-A suíte cobre eventos, normalização, proveniência, provider simulado, backend de gravação, motor, multitouch, SAFE_RELEASE, cursor, máquina de estados, editor, storage, capacidades e diagnóstico. Dois testes de integração da GUI exigem PySide6: são ignorados no Python do sistema e executados com `.venv/bin/python -B -m unittest discover -s tests -v` em modo `offscreen`. Não usa pytest, não inicializa o launcher e não toca hardware.
+A suíte cobre eventos, normalização, proveniência, provider simulado, backend de gravação, motor, multitouch, SAFE_RELEASE, cursor, máquina de estados, editor, storage, capacidades e diagnóstico. Dois testes de integração da GUI exigem PySide6 e são ignorados no Python do sistema. Quando um `.venv` com PySide6 estiver disponível (`run.sh` pode criá-lo), execute `QT_QPA_PLATFORM=offscreen .venv/bin/python -B -m unittest discover -s tests -v`. Nesta árvore o `.venv` ainda não foi criado. Não usa pytest, não inicializa o launcher e não toca hardware.
